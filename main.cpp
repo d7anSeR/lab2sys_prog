@@ -38,7 +38,7 @@ void secondPlayer(int N, mqd_t mq) {
 
     // Получаем секретное число из очереди сообщений
     char buffer[MAX_MESSAGE_SIZE ];
-    mq_receive(mq, buffer, MAX_MESSAGE_SIZE, NULL);
+    mq_receive(mq, *buffer, MAX_MESSAGE_SIZE, NULL);
     cout << "Сообщение было принято вторым процессом "<< endl;
     secretNumber = atoi(buffer);
     cout << secretNumber << endl;
@@ -86,6 +86,7 @@ int main(int argc, char *argv[]) {
 
         // Ждем завершения второго процесса
         wait(NULL);
+
 
         // Закрываем и удаляем очередь сообщений
         mq_close(mq);
