@@ -2,19 +2,21 @@
 #include <iostream>
 #include <unistd.h>
 #include <vector>
+#include <wait.h>
 #include <algorithm>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/fcntl.h>
-#include <mqueue.h> 
-void lead(mqd_t send, mqd_t get, const char* procname, int N)
+
+void lead(int send, int get, const char* procname, int N)
 {
     std::cout << procname << ": I guessed a number from 1 to "<< N <<". Try to guess it!" << std::endl;
     srand(time(nullptr));
     int number = rand() % N + 1;
-    int response = 2;
     std::cout << "\tDigit: " << number << std::endl;
-    check(mq_send(send, (const char*)&response, sizeof(response), 0));
+    int response = 2;
+    check(write(send, &response, sizeof(response)));
+
     int attempt;
     int count = 0;
     double time1 = clock();
@@ -23,7 +25,7 @@ void lead(mqd_t send, mqd_t get, const char* procname, int N)
         count++;
         while(true)
         {
-            check(mq_receive(get, (char*)&attempt, sizeof(attempt), nullptr)); 
+            check(read(get, &attempt, sizeof(attempt)));
             if (attempt > 0)
                 break;
         }
@@ -41,20 +43,19 @@ void lead(mqd_t send, mqd_t get, const char* procname, int N)
             std::cout << procname << ": YEP, that's it!" << std::endl;
             std::cout << "Attempts: " << count << "\t Time: " << time_c << " msc "<<std::endl << std::endl;
         }
-        
-        check(mq_send(send, (const char*)&response, sizeof(response), 0)); 
+        check(write(send, &response, sizeof(response)));
 
     } while(attempt != number);
 }
 
-void guess(mqd_t send, mqd_t get, const char* procname, int N)
+void guess(int send, int get, const char* procname, int N)
 {
     sleep(2);
     int response;
     srand(time(nullptr));
     while(true)
     {
-        check(mq_receive(get, (char*)&response, sizeof(response), nullptr)); 
+        check(read(get, &response, sizeof(response)));
         if (response == 2)
             break;
     }
@@ -74,10 +75,10 @@ void guess(mqd_t send, mqd_t get, const char* procname, int N)
         }while(std::find(used.begin(), used.end(), attempt) != used.end());
 
         std::cout << procname << ": Maybe it's " << attempt << "?" << std::endl;
-        check(mq_send(send, (const char*)&attempt, sizeof(attempt), 0)); 
+        check(write(send, &attempt, sizeof(attempt)));
         while(true)
         {
-            check(mq_receive(get, (char*)&response, sizeof(response), nullptr)); 
+            check(read(get, &response, sizeof(response)));
             if (response == 1 or response == 0)
                 break;
         }
@@ -85,7 +86,7 @@ void guess(mqd_t send, mqd_t get, const char* procname, int N)
 }
 
 int main(int argv, char* argc[])
-{
+{    
     int iterations = 0;
     int N = 0;
     if (argc[1] != 0)
@@ -109,11 +110,11 @@ int main(int argv, char* argc[])
     std::cout << "Iterations: " << iterations << std::endl;
     std::cout << "Range: " << N << std::endl;
     bool leads = 1;
-    mqd_t a_mq, b_mq;
-    struct mq_attr attr; 
-    attr.mq_flags = 0;
-    attr.mq_maxmsg = 10;
-    attr.mq_msgsize = sizeof(int);
+    unlink("tmp/pipea");
+    unlink("tmp/pipeb");
+    check(mkfifo("/tmp/pipea", S_IRUSR | S_IWUSR));
+    check(mkfifo("/tmp/pipeb", S_IRUSR | S_IWUSR));
+    int a_pipe, b_pipe;
 
     pid_t pid = check(fork());
     for (int i = 0; i < iterations; i++)
@@ -121,27 +122,27 @@ int main(int argv, char* argc[])
 
         if(pid)
         {
-            a_mq = mq_open("/queuea", O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR, &attr); 
-            b_mq = mq_open("/queueb", O_RDONLY | O_CREAT, S_IRUSR | S_IWUSR, &attr);
+            a_pipe = open("/tmp/pipea", O_WRONLY);
+            b_pipe = open("/tmp/pipeb", O_RDONLY);
             if (leads)
-                lead(a_mq, b_mq, "proc1", N);
+                lead(a_pipe, b_pipe, "proc1", N);
             else
-                guess(a_mq, b_mq, "proc1", N);
+                guess(a_pipe, b_pipe, "proc1", N);
         }
         else
         {
-            a_mq = mq_open("/queuea", O_RDONLY | O_CREAT, S_IRUSR | S_IWUSR, &attr);
-            b_mq = mq_open("/queueb", O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR, &attr);
+            a_pipe = open("/tmp/pipea", O_RDONLY);
+            b_pipe = open("/tmp/pipeb", O_WRONLY);
             if (!leads)
-                lead(b_mq, a_mq, "proc2", N);
+                lead(b_pipe, a_pipe, "proc2", N);
             else
-                guess(b_mq, a_mq, "proc2", N);
+                guess(b_pipe, a_pipe, "proc2", N);
         }
         leads = !leads;
-        mq_close(a_mq); 
-        mq_close(b_mq);
     }
-    mq_unlink("/queuea");
-    mq_unlink("/queueb");
+    check(close(a_pipe));
+    check(close(b_pipe));
+    unlink("/tmp/pipea");
+    unlink("/tmp/pipeb");
     return 0;
 }
