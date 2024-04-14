@@ -1,88 +1,146 @@
+#include "check.hpp"
 #include <iostream>
-#include <sstream>
 #include <unistd.h>
+#include <vector>
+#include <algorithm>
 #include <sys/types.h>
-#include <sys/wait.h>
-#include <cstdlib>
-#include <ctime>
-#include <cstring>
-#include <fcntl.h>
 #include <sys/stat.h>
-#include <mqueue.h>
-#include <cerrno>
-
-using namespace std;
-
-const int MAX_MESSAGE_SIZE = 256;
-const int MAX_GUESSES = 50;
-
-// Функция первого игрока
-void firstPlayer(int N, mqd_t mq) {
-    srand(time(NULL));
-    int secretNumber = rand() % N + 1;
-    cout << "Загаданное число: " << secretNumber << endl;
-    // Отправляем секретное число в очередь сообщений
-    char buffer[MAX_MESSAGE_SIZE];
-    sprintf(buffer, "%d", secretNumber);
-    if (mq_send(mq, buffer, strlen(buffer) + 1, 0) == -1) {
-        cerr << "Ошибка при отправке сообщения" << endl;
-    }
-    
-}
-
-// Функция второго игрока
-void secondPlayer(int N, mqd_t mq) {
-    int guess = 0;
-    int attempts = 0;
-    int secretNumber = 0;
-    std::stringstream ss;
-
-    // Получаем секретное число из очереди сообщений
-    char buffer[MAX_MESSAGE_SIZE] = "";
-    ssize_t bytes = 0;
-    bytes = mq_receive(mq, buffer, MAX_MESSAGE_SIZE, NULL);
-    if(bytes < 0){
-        cerr << "Ошибка при приеме сообщения: " << strerror(errno) << endl;
-    }
-    else{
-        cout << "Сообщение было принято вторым процессом "<< endl;
-        secretNumber = atoi(buffer);
-        cout << secretNumber << endl;
-        // Играем, пока не угадаем число или не достигнем максимального числа попыток
-        do {
-            guess = rand() % N + 1;
-            cout << "Попытка: " << guess << endl;
-            attempts++;
-        } while (guess != secretNumber && attempts < MAX_GUESSES);
-        // Выводим статистику игры
-        if (guess == secretNumber) {
-            cout << "Число попыток: " << attempts << endl;
-        } else {
-            cout << "Не удалось угадать число за " << MAX_GUESSES << " попыток." << endl;
+#include <sys/fcntl.h>
+#include <mqueue.h> 
+void lead(mqd_t send, mqd_t get, const char* procname, int N)
+{
+    std::cout << procname << ": I guessed a number from 1 to "<< N <<". Try to guess it!" << std::endl;
+    srand(time(nullptr));
+    int number = rand() % N + 1;
+    int response = 2;
+    check(mq_send(send, (const char*)&response, sizeof(response), 0));
+    int attempt;
+    int count = 0;
+    double time1 = clock();
+    do
+    {
+        count++;
+        while(true)
+        {
+            check(mq_receive(get, (char*)&attempt, sizeof(attempt), nullptr)); 
+            if (attempt > 0 && attempt < 11)
+                break;
         }
-    }    
+
+        if (attempt != number)
+        {
+            response = 0;
+            std::cout << procname << ": Nope, try again!" << std::endl;
+        }
+        else
+        {
+            response = 1;
+            double time2 = clock();
+            double time_c = time2 - time1;
+            std::cout << procname << ": YEP, that's it!" << std::endl;
+            std::cout << "Attempts: " << count << "\t Time: " << time_c << " msc "<<std::endl << std::endl;
+        }
+        
+        check(mq_send(send, (const char*)&response, sizeof(response), 0)); 
+
+    } while(attempt != number);
 }
 
-int main(int argc, char *argv[]) {
-    int N = 3;
-    pid_t pid = fork();
-    if (pid) {
-        mqd_t mq = mq_open("/queue", O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-        // Второй процесс (второй игрок)
-        cout << mq << endl;
-        secondPlayer(N, mq);
-        int stat;
-        wait(&stat);
-        mq_close(mq);
-        mq_unlink("/queue");
+void guess(mqd_t send, mqd_t get, const char* procname, int N)
+{
+    sleep(2);
+    int response;
+    while(true)
+    {
+        check(mq_receive(get, (char*)&response, sizeof(response), nullptr)); 
+        if (response == 2)
+            break;
     }
-    else{
-        mqd_t mq = mq_open("/queue", O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-        cout << mq << endl;
-        firstPlayer(N, mq);
-        mq_close(mq);
-        mq_unlink("/queue");
-    }
+    std::vector<int> used;
+    while(response != 1)
+    {
+        int attempt;
+        do
+        {
+            srand(time(nullptr));
+            attempt = rand() % N + 1;
 
-    return EXIT_SUCCESS;
+            if (std::find(used.begin(), used.end(), attempt) == used.end())
+            {
+                used.push_back(attempt);
+                break;
+            }
+        }while(std::find(used.begin(), used.end(), attempt) != used.end());
+
+        std::cout << procname << ": Maybe it's " << attempt << "?" << std::endl;
+        check(mq_send(send, (const char*)&attempt, sizeof(attempt), 0)); 
+        while(true)
+        {
+            check(mq_receive(get, (char*)&response, sizeof(response), nullptr)); 
+            if (response == 1 or response == 0)
+                break;
+        }
+    }
+}
+
+int main(int argv, char* argc[])
+{
+    int iterations = 0;
+    int N = 0;
+    if (argc[1] != 0)
+    {
+        N = std::strtol(argc[1], nullptr, 10);
+        if (N < 0)
+            N = -1*N;
+    }
+    else
+        N = 3;
+
+    if (argc[2] != 0)
+    {
+        iterations = std::strtol(argc[2], nullptr, 10);
+        if (iterations < 0)
+            iterations = -1*iterations;
+    }
+    else
+        iterations = 2;
+
+    std::cout << "Iterations: " << iterations << std::endl;
+    std::cout << "Range: " << N << std::endl;
+    bool leads = 1;
+    mqd_t a_mq, b_mq;
+    struct mq_attr attr; 
+    attr.mq_flags = 0;
+    attr.mq_maxmsg = 10;
+    attr.mq_msgsize = sizeof(int);
+
+    pid_t pid = check(fork());
+    for (int i = 0; i < iterations; i++)
+    {
+
+        if(pid)
+        {
+            a_mq = mq_open("/queuea", O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR, &attr); 
+            b_mq = mq_open("/queueb", O_RDONLY | O_CREAT, S_IRUSR | S_IWUSR, &attr);
+            if (leads)
+                lead(a_mq, b_mq, "proc1", N);
+            else
+                guess(a_mq, b_mq, "proc1", N);
+        }
+        else
+        {
+            a_mq = mq_open("/queuea", O_RDONLY | O_CREAT, S_IRUSR | S_IWUSR, &attr);
+            b_mq = mq_open("/queueb", O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR, &attr);
+            if (!leads)
+                lead(b_mq, a_mq, "proc2", N);
+            else
+                guess(b_mq, a_mq, "proc2", N);
+        }
+        leads = !leads;
+        mq_close(a_mq); 
+        mq_close(b_mq);
+    }
+    mq_unlink("/queuea");
+    mq_unlink("/queueb");
+    return 0;
 }
