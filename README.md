@@ -48,6 +48,6 @@
 
 
 ### Данная лабораторная работа выполнялась ***только на сложном уровне***.
-### При этом использовались очередь сообщений и именованный канал.
+### При этом использовались очередь сообщений[main.cpp](https://github.com/d7anSeR/lab2sys_prog/blob/main/main.cpp) и именованный канал[main_fifo](https://github.com/d7anSeR/lab2sys_prog/blob/main/main_fifo.cpp).
 
 ## Полное задание на лабу можно найти [здесь](https://github.com/itsecd/system-programming/blob/main/Labs/Лабораторная%20работа%202.pdf)
